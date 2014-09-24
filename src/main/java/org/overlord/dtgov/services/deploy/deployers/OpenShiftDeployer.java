@@ -40,8 +40,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
@@ -82,7 +80,7 @@ public class OpenShiftDeployer extends AbstractDeployer<CustomTarget> {
 		 */
 		OpenShiftConfiguration openshiftConf = new OpenShiftConfiguration();
 		IOpenShiftConnection connection = new OpenShiftConnectionFactory().getConnection(clientId,
-				openshiftConf.getRhlogin(), removeQuotes(openshiftConf.getPassword()), openshiftConf.getLibraServer());
+				openshiftConf.getRhlogin(), openshiftConf.getPassword(), openshiftConf.getLibraServer());
 
 		// Once you have your connection you can get your user instance which will allow you to create your the domain and the applications.
 		IUser user = connection.getUser();
@@ -158,7 +156,7 @@ public class OpenShiftDeployer extends AbstractDeployer<CustomTarget> {
 
 		OpenShiftConfiguration openshiftConf = new OpenShiftConfiguration();
 		IOpenShiftConnection connection = new OpenShiftConnectionFactory().getConnection(clientId,
-				openshiftConf.getRhlogin(), removeQuotes(openshiftConf.getPassword()),
+				openshiftConf.getRhlogin(), openshiftConf.getPassword(),
 				openshiftConf.getLibraServer());
 
 		IUser user = connection.getUser();
@@ -289,23 +287,6 @@ public class OpenShiftDeployer extends AbstractDeployer<CustomTarget> {
 		final OutputStream os = new FileOutputStream(file);
 		IOUtils.copy(is, os);
 		return file;
-	}
-
-	/*
-	 * Until https://issues.jboss.org/browse/OSJC-124 is fixed we have to remove quotes from password manually.
-	 */
-	private String removeQuotes(String value) {
-		if (value == null) {
-			return null;
-		}
-		Matcher matcher = Pattern.compile("['\"]*([^'\"]+)['\"]*").matcher(value);
-		if (matcher.find()
-				&& matcher.groupCount() == 1) {
-			return matcher.group(1);
-		} else {
-			return value;
-		}
-	}
-	
+	}	
 	// TODO: add support for multiple cartridges (Tomcat, WildFly, ...)
 }
