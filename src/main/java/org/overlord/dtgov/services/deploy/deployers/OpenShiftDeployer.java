@@ -16,6 +16,7 @@ import com.openshift.client.IDomain;
 import com.openshift.client.IOpenShiftConnection;
 import com.openshift.client.IUser;
 import com.openshift.client.OpenShiftConnectionFactory;
+import com.openshift.client.OpenShiftException;
 import com.openshift.client.SSHKeyPair;
 import com.openshift.client.SSHPublicKey;
 import com.openshift.client.cartridge.query.LatestVersionOf;
@@ -25,6 +26,7 @@ import com.openshift.internal.client.utils.StreamUtils;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -36,7 +38,7 @@ import java.net.URISyntaxException;
  * Properties are read from ~/.openshift/express.conf or from system properties (e.g -Drhpassword=<pwd>).
  * OpenShift Domain & application name are read from DtgovDeploymentTarget stored in S-RAMP.
  * DTGov server needs to be launched with -Ddtgov.deployers.customDir pointing to dir with built deployer jar.
- * 
+ * TODO: add support for multiple cartridges (Tomcat, WildFly, ...)
  * @author sbunciak
  *
  */
@@ -88,11 +90,7 @@ public class OpenShiftDeployer extends AbstractDeployer<CustomTarget> {
 		 * In case we create a new domain, we have to make sure that OpenShift has our ssh-key. 
 		 * The ssh-key is required as soon as you deal with an OpenShift git-repository, the application logs etc (not when manipulating resources). To keep things simple, we will stick to the default ssh-key id_rsa.pub and add it to OpenShift in case it's not present yet. When adding the key, we will use a unique name which is the current time in millisecons in this simplified example:
 		 */
-		SSHKeyPair.create(SSH_PASSPHRASE, SSH_PRIVATE_KEY, SSH_PUBLIC_KEY);
-		// TODO: do not create a new ssh key pair if we can create an SSH connection
-
-		user.getSSHKeyByName("dtgov-key").destroy();
-		user.addSSHKey("dtgov-key", new SSHPublicKey(SSH_PUBLIC_KEY));
+		setUpSSHKeys(user);
 
 		/*
 		 * Now that we have a domain, we are ready to create an application.
@@ -100,7 +98,6 @@ public class OpenShiftDeployer extends AbstractDeployer<CustomTarget> {
 		IApplication application = domain.getApplicationByName(openshiftAppName);
 		if (application == null) {
 			//If there's no such application, it will create a new one:
-
 			application = domain.createApplication(openshiftAppName, LatestVersionOf.jbossAs().get(user));
 		}
 
@@ -118,7 +115,8 @@ public class OpenShiftDeployer extends AbstractDeployer<CustomTarget> {
 		writeTo(snapshot, new FileOutputStream(snapshotFile));
 
 		// append application jar file to the saved snapshot
-		File modifiedSnapshotFile = SrampTarUtils.appendAppJarInTarArchive(new FileInputStream(snapshotFile), applicationFile);
+		File modifiedSnapshotFile = SrampTarUtils.appendAppJarInTarArchive(new FileInputStream(snapshotFile),
+				applicationFile);
 
 		// operations
 		InputStream restoreOutput = applicationSession.restoreDeploymentSnapshot(new FileInputStream(
@@ -152,14 +150,10 @@ public class OpenShiftDeployer extends AbstractDeployer<CustomTarget> {
 		if (!domain.equals(target.getProperty("domain"))) {
 			logger.warn("OpenShift deployer is using different domain for undeployment than configured!");
 		}
+		
+		setUpSSHKeys(user);
 
 		IApplication application = domain.getApplicationByName(openshiftAppName);
-
-		SSHKeyPair.create(SSH_PASSPHRASE, SSH_PRIVATE_KEY, SSH_PUBLIC_KEY);
-		// TODO: do not create a new ssh key pair if we can create an SSH connection
-
-		user.getSSHKeyByName("dtgov-key").destroy();
-		user.addSSHKey("dtgov-key", new SSHPublicKey(SSH_PUBLIC_KEY));
 
 		// Binary deploy the application
 		application.setDeploymentType(DeploymentTypes.binary());
@@ -203,5 +197,26 @@ public class OpenShiftDeployer extends AbstractDeployer<CustomTarget> {
 			StreamUtils.close(fileOut);
 		}
 	}
-	// TODO: add support for multiple cartridges (Tomcat, WildFly, ...)
+	
+	private void setUpSSHKeys(IUser user) throws OpenShiftException, FileNotFoundException, IOException {
+		boolean createNew = false;
+		
+		try {
+			SSHKeyPair keyPair = SSHKeyPair.load(SSH_PRIVATE_KEY, SSH_PUBLIC_KEY);
+			if (!user.hasSSHPublicKey(keyPair.getPublicKey())) {
+				// keys does not match - create new pair
+				createNew = true;
+			}
+		} catch (OpenShiftException e) {
+			// exception occured - create new pair
+			createNew = true;
+		}
+		
+		if (createNew) {
+			// Create new pair if the old on does not exist
+			SSHKeyPair.create(SSH_PASSPHRASE, SSH_PRIVATE_KEY, SSH_PUBLIC_KEY);
+			user.getSSHKeyByName("dtgov-key").destroy();
+			user.addSSHKey("dtgov-key", new SSHPublicKey(SSH_PUBLIC_KEY));
+		}
+	}
 }
