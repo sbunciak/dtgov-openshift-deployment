@@ -1,18 +1,9 @@
 package org.overlord.dtgov.services.deploy.deployers;
 
-import org.apache.commons.compress.archivers.ArchiveEntry;
-import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
-import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
-import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
-import org.apache.commons.io.IOUtils;
-import org.apache.http.auth.AuthenticationException;
-
 import org.oasis_open.docs.s_ramp.ns.s_ramp_v1.BaseArtifactType;
 import org.overlord.dtgov.common.targets.CustomTarget;
-import org.overlord.sramp.atom.err.SrampAtomException;
+import org.overlord.dtgov.services.utils.SrampTarUtils;
 import org.overlord.sramp.client.SrampAtomApiClient;
-import org.overlord.sramp.client.SrampClientException;
-import org.overlord.sramp.common.ArtifactType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,11 +28,8 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.util.zip.GZIPInputStream;
-import java.util.zip.GZIPOutputStream;
 
 /**
  * 
@@ -60,8 +48,7 @@ public class OpenShiftDeployer extends AbstractDeployer<CustomTarget> {
 
 	private final String SSH_PUBLIC_KEY = System.getProperty("user.home") + "/.ssh/dtgov_rsa.pub";
 	private final String SSH_PRIVATE_KEY = System.getProperty("user.home") + "/.ssh/dtgov_rsa";
-	// TODO: ssh_passphrase should not be in source code, most probably :-) 
-	private final String SSH_PASSPHRASE = "overlord";
+	private final String SSH_PASSPHRASE = System.getProperty("ssh_passphrase", "overlord");
 
 	/*
 	 * (non-Javadoc)
@@ -70,7 +57,7 @@ public class OpenShiftDeployer extends AbstractDeployer<CustomTarget> {
 	@Override
 	public String deploy(BaseArtifactType artifact, CustomTarget target, SrampAtomApiClient client) throws Exception {
 		// download jar to temp location
-		final File applicationFile = downloadAppJarFromSramp(artifact, client);
+		final File applicationFile = SrampTarUtils.downloadAppJarFromSramp(artifact, client);
 		final String openshiftAppName = target.getProperty("application");
 		final String openshiftDomain = target.getProperty("domain");
 		// final String cartridge = target.getProperty("cartridge"); // WildFly, Tomcat, JBossAS
@@ -131,7 +118,7 @@ public class OpenShiftDeployer extends AbstractDeployer<CustomTarget> {
 		writeTo(snapshot, new FileOutputStream(snapshotFile));
 
 		// append application jar file to the saved snapshot
-		File modifiedSnapshotFile = appendAppJarInTarArchive(new FileInputStream(snapshotFile), applicationFile);
+		File modifiedSnapshotFile = SrampTarUtils.appendAppJarInTarArchive(new FileInputStream(snapshotFile), applicationFile);
 
 		// operations
 		InputStream restoreOutput = applicationSession.restoreDeploymentSnapshot(new FileInputStream(
@@ -151,7 +138,7 @@ public class OpenShiftDeployer extends AbstractDeployer<CustomTarget> {
 			SrampAtomApiClient client)
 			throws Exception {
 
-		final File applicationFile = downloadAppJarFromSramp(prevVersionArtifact, client);
+		final File applicationFile = SrampTarUtils.downloadAppJarFromSramp(prevVersionArtifact, client);
 		final String openshiftAppName = target.getProperty("application");
 
 		OpenShiftConfiguration openshiftConf = new OpenShiftConfiguration();
@@ -186,7 +173,8 @@ public class OpenShiftDeployer extends AbstractDeployer<CustomTarget> {
 		writeTo(snapshot, new FileOutputStream(snapshotFile));
 
 		// append application jar file to the saved snapshot
-		File modifiedSnapshotFile = removeAppJarFromTarArchive(new FileInputStream(snapshotFile), applicationFile);
+		File modifiedSnapshotFile = SrampTarUtils.removeAppJarFromTarArchive(new FileInputStream(snapshotFile),
+				applicationFile);
 
 		// operations
 		InputStream restoreOutput = applicationSession.restoreDeploymentSnapshot(new FileInputStream(
@@ -215,78 +203,5 @@ public class OpenShiftDeployer extends AbstractDeployer<CustomTarget> {
 			StreamUtils.close(fileOut);
 		}
 	}
-
-	private File appendAppJarInTarArchive(InputStream tarIn, File appJar) throws AuthenticationException, IOException {
-
-		File newArchive = File.createTempFile("new-openshift-snapshot", ".tar.gz");
-		// newArchive.deleteOnExit();
-		TarArchiveOutputStream newArchiveOut = new TarArchiveOutputStream(new GZIPOutputStream(new FileOutputStream(
-				newArchive)));
-		newArchiveOut.setLongFileMode(TarArchiveOutputStream.LONGFILE_GNU);
-		TarArchiveInputStream archiveIn = new TarArchiveInputStream(new GZIPInputStream(tarIn));
-
-		try {
-			// copy the existing entries
-			for (ArchiveEntry nextEntry = null; (nextEntry = archiveIn.getNextEntry()) != null;) {
-				newArchiveOut.putArchiveEntry(nextEntry);
-				IOUtils.copy(archiveIn, newArchiveOut);
-				newArchiveOut.closeArchiveEntry();
-			}
-
-			TarArchiveEntry newEntry = new TarArchiveEntry(appJar, "/repo/deployments/" + appJar.getName());
-			newEntry.setSize(appJar.length());
-			newArchiveOut.putArchiveEntry(newEntry);
-			IOUtils.copy(new FileInputStream(appJar), newArchiveOut);
-			newArchiveOut.closeArchiveEntry();
-			return newArchive;
-		} finally {
-			newArchiveOut.finish();
-			newArchiveOut.flush();
-			StreamUtils.close(archiveIn);
-			StreamUtils.close(newArchiveOut);
-		}
-	}
-
-	private File removeAppJarFromTarArchive(InputStream tarIn, File appJar) throws AuthenticationException, IOException {
-		File newArchive = File.createTempFile("new-openshift-snapshot", ".tar.gz");
-		// newArchive.deleteOnExit();
-		TarArchiveOutputStream newArchiveOut = new TarArchiveOutputStream(new GZIPOutputStream(new FileOutputStream(
-				newArchive)));
-		newArchiveOut.setLongFileMode(TarArchiveOutputStream.LONGFILE_GNU);
-		TarArchiveInputStream archiveIn = new TarArchiveInputStream(new GZIPInputStream(tarIn));
-
-		try {
-			// copy the existing entries
-			for (ArchiveEntry nextEntry = null; (nextEntry = archiveIn.getNextEntry()) != null;) {
-				if (!nextEntry.getName().contains(appJar.getName())) {
-					newArchiveOut.putArchiveEntry(nextEntry);
-					IOUtils.copy(archiveIn, newArchiveOut);
-					newArchiveOut.closeArchiveEntry();
-				}
-			}
-
-			return newArchive;
-		} finally {
-			newArchiveOut.finish();
-			newArchiveOut.flush();
-			StreamUtils.close(archiveIn);
-			StreamUtils.close(newArchiveOut);
-		}
-	}
-
-	private File downloadAppJarFromSramp(BaseArtifactType artifact, SrampAtomApiClient client)
-			throws SrampClientException,
-			SrampAtomException, IOException {
-		final InputStream is = client.getArtifactContent(ArtifactType.valueOf(artifact), artifact.getUuid());
-		final File file = new File(System.getProperty("java.io.tmpdir") + "/" + artifact.getName());
-		if (file.exists()) {
-			file.delete();
-		}
-
-		file.createNewFile();
-		final OutputStream os = new FileOutputStream(file);
-		IOUtils.copy(is, os);
-		return file;
-	}	
 	// TODO: add support for multiple cartridges (Tomcat, WildFly, ...)
 }
