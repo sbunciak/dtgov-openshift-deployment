@@ -19,7 +19,7 @@ import com.openshift.client.OpenShiftConnectionFactory;
 import com.openshift.client.OpenShiftException;
 import com.openshift.client.SSHKeyPair;
 import com.openshift.client.SSHPublicKey;
-import com.openshift.client.cartridge.query.LatestVersionOf;
+import com.openshift.client.cartridge.query.LatestStandaloneCartridge;
 import com.openshift.client.configuration.OpenShiftConfiguration;
 import com.openshift.internal.client.ApplicationSSHSession;
 import com.openshift.internal.client.utils.StreamUtils;
@@ -38,7 +38,7 @@ import java.net.URISyntaxException;
  * Properties are read from ~/.openshift/express.conf or from system properties (e.g -Drhpassword=<pwd>).
  * OpenShift Domain & application name are read from DtgovDeploymentTarget stored in S-RAMP.
  * DTGov server needs to be launched with -Ddtgov.deployers.customDir pointing to dir with built deployer jar.
- * TODO: add support for multiple cartridges (Tomcat, WildFly, ...)
+ * 
  * @author sbunciak
  *
  */
@@ -62,7 +62,9 @@ public class OpenShiftDeployer extends AbstractDeployer<CustomTarget> {
 		final File applicationFile = SrampTarUtils.downloadAppJarFromSramp(artifact, client);
 		final String openshiftAppName = target.getProperty("application");
 		final String openshiftDomain = target.getProperty("domain");
-		// final String cartridge = target.getProperty("cartridge"); // WildFly, Tomcat, JBossAS
+		final String cartridge = target.getProperty("cartridge"); // WildFly, Tomcat, JBossAS
+		final String deploymentsDir = target.getProperty("directory").isEmpty() ? "deployments" : target
+				.getProperty("directory");
 		/*
 		 * Before OpenShift Deployer can manipulate resources on OpenShift, it has to connect to it. 
 		 * It asks the OpenShiftConnectionFactory for a new connection.
@@ -96,9 +98,12 @@ public class OpenShiftDeployer extends AbstractDeployer<CustomTarget> {
 		 * Now that we have a domain, we are ready to create an application.
 		 */
 		IApplication application = domain.getApplicationByName(openshiftAppName);
+		// TODO: if application exists, but using different cartridge
 		if (application == null) {
-			//If there's no such application, it will create a new one:
-			application = domain.createApplication(openshiftAppName, LatestVersionOf.jbossAs().get(user));
+			// If there's no such application, it will create a new one.
+			// We are taking cartridge name directly from Target property - maybe it's too permissive 
+			application = domain
+					.createApplication(openshiftAppName, new LatestStandaloneCartridge(cartridge).get(user));
 		}
 
 		logger.info("OpenShift Deployer using application: " + application.getName());
@@ -116,7 +121,7 @@ public class OpenShiftDeployer extends AbstractDeployer<CustomTarget> {
 
 		// append application jar file to the saved snapshot
 		File modifiedSnapshotFile = SrampTarUtils.appendAppJarInTarArchive(new FileInputStream(snapshotFile),
-				applicationFile);
+				applicationFile, deploymentsDir);
 
 		// operations
 		InputStream restoreOutput = applicationSession.restoreDeploymentSnapshot(new FileInputStream(
@@ -150,7 +155,7 @@ public class OpenShiftDeployer extends AbstractDeployer<CustomTarget> {
 		if (!domain.equals(target.getProperty("domain"))) {
 			logger.warn("OpenShift deployer is using different domain for undeployment than configured!");
 		}
-		
+
 		setUpSSHKeys(user);
 
 		IApplication application = domain.getApplicationByName(openshiftAppName);
@@ -197,10 +202,10 @@ public class OpenShiftDeployer extends AbstractDeployer<CustomTarget> {
 			StreamUtils.close(fileOut);
 		}
 	}
-	
+
 	private void setUpSSHKeys(IUser user) throws OpenShiftException, FileNotFoundException, IOException {
 		boolean createNew = false;
-		
+
 		try {
 			SSHKeyPair keyPair = SSHKeyPair.load(SSH_PRIVATE_KEY, SSH_PUBLIC_KEY);
 			if (!user.hasSSHPublicKey(keyPair.getPublicKey())) {
@@ -211,7 +216,7 @@ public class OpenShiftDeployer extends AbstractDeployer<CustomTarget> {
 			// exception occured - create new pair
 			createNew = true;
 		}
-		
+
 		if (createNew) {
 			// Create new pair if the old on does not exist
 			SSHKeyPair.create(SSH_PASSPHRASE, SSH_PRIVATE_KEY, SSH_PUBLIC_KEY);
